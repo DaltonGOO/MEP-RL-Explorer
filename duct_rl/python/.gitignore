@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Trained model checkpoints (regenerate with train.py / train3d.py)
+models/
+
+# Rendered episode images
+outputs/
+test_grid.png
+
+# Virtual environments
+.venv/
+.axon_venv/
+venv/
+
+# Dev tool artifacts
+.axon/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

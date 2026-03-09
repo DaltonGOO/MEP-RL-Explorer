@@ -1,0 +1,41 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Trained model checkpoints
+models/
+duct_rl/web/backend/models/
+duct_rl/web/backend/weights/
+
+# Rendered episode images
+outputs/
+test_grid.png
+
+# Virtual environments
+.venv/
+.axon_venv/
+venv/
+
+# Rust build artifacts
+duct_rl/web/crate/target/
+# Keep WASM pkg committed for zero-install experience
+# duct_rl/web/crate/pkg/
+
+# Node
+duct_rl/web/frontend/node_modules/
+duct_rl/web/frontend/dist/
+
+# Dev tool artifacts
+.axon/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/

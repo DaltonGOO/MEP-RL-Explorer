@@ -1,0 +1,7 @@
+gymnasium>=0.29
+stable-baselines3>=2.1
+numpy
+matplotlib
+pyvista             # 3D visualization
+pyqt5               # GUI framework for app3d.py
+pyvistaqt           # PyVista <-> Qt integration

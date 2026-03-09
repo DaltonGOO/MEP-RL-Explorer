@@ -1,0 +1,25 @@
+services:
+  # Python backend (training + API)
+  backend:
+    build:
+      context: .
+      dockerfile: duct_rl/web/backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - models-data:/app/duct_rl/web/backend/models
+      - weights-data:/app/duct_rl/web/backend/weights
+
+  # React frontend (dev server)
+  frontend:
+    build:
+      context: .
+      dockerfile: duct_rl/web/frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://backend:8000
+
+volumes:
+  models-data:
+  weights-data:

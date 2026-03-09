@@ -1,0 +1,16 @@
+{
+  "name": "mep-routing-core",
+  "type": "module",
+  "description": "Rust/WASM core for MEP RL routing — grid building, stepping, inference",
+  "version": "0.1.0",
+  "files": [
+    "mep_routing_core_bg.wasm",
+    "mep_routing_core.js",
+    "mep_routing_core.d.ts"
+  ],
+  "main": "mep_routing_core.js",
+  "types": "mep_routing_core.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

@@ -1,0 +1,9 @@
+# Ignore everything by default (wasm-pack output)
+*
+# But keep the built WASM package for zero-install experience
+!.gitignore
+!package.json
+!mep_routing_core.js
+!mep_routing_core.d.ts
+!mep_routing_core_bg.wasm
+!mep_routing_core_bg.wasm.d.ts
