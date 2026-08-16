@@ -12,8 +12,18 @@ fn test_build_all_rooms() {
         assert!(scene.ny > 0);
         assert!(scene.nz > 0);
         // Start and target should be placed
-        assert_eq!(scene.get(scene.start_ijk[0], scene.start_ijk[1], scene.start_ijk[2]), 2);
-        assert_eq!(scene.get(scene.target_ijk[0], scene.target_ijk[1], scene.target_ijk[2]), 3);
+        assert_eq!(
+            scene.get(scene.start_ijk[0], scene.start_ijk[1], scene.start_ijk[2]),
+            2
+        );
+        assert_eq!(
+            scene.get(
+                scene.target_ijk[0],
+                scene.target_ijk[1],
+                scene.target_ijk[2]
+            ),
+            3
+        );
     }
 }
 
@@ -95,7 +105,12 @@ fn test_reward_breakdown() {
     let result = step(&scene, &mut state, 0, &mep);
     let b = &result.breakdown;
     // Total should equal sum of components
-    let sum = b.step_penalty + b.distance_delta + b.turn_penalty
-        + b.vertical_penalty + b.revisit_penalty + b.collision_penalty + b.target_bonus;
+    let sum = b.step_penalty
+        + b.distance_delta
+        + b.turn_penalty
+        + b.vertical_penalty
+        + b.revisit_penalty
+        + b.collision_penalty
+        + b.target_bonus;
     assert!((b.total - sum).abs() < 1e-10);
 }
