@@ -144,7 +144,7 @@ pub fn step_episode(scene_id: u32, state_id: u32, action: u8, mep: &MEPConfig) -
             // Update the stored state
             *state = result.state;
 
-            let obs = g::compute_obs(scene, &states[&state_id]);
+            let obs = g::compute_obs(scene, &states[&state_id], mep);
 
             let info = serde_json::json!({
                 "reward": result.reward,
@@ -181,7 +181,7 @@ pub fn get_state_position(state_id: u32) -> Vec<u32> {
 }
 
 #[wasm_bindgen]
-pub fn get_obs(scene_id: u32, state_id: u32) -> Vec<f32> {
+pub fn get_obs(scene_id: u32, state_id: u32, mep: &MEPConfig) -> Vec<f32> {
     SCENES.with(|s| {
         let scenes = s.borrow();
         let scene = scenes.get(&scene_id).expect("Invalid scene ID");
@@ -189,9 +189,16 @@ pub fn get_obs(scene_id: u32, state_id: u32) -> Vec<f32> {
         STATES.with(|st| {
             let states = st.borrow();
             let state = states.get(&state_id).expect("Invalid state ID");
-            g::compute_obs(scene, state).to_vec()
+            g::compute_obs(scene, state, mep).to_vec()
         })
     })
+}
+
+/// Observation width this build produces. Exposed so the frontend can tell a
+/// stale model from a current one before loading it.
+#[wasm_bindgen]
+pub fn obs_dim() -> usize {
+    g::OBS_DIM
 }
 
 // ── Model inference ─────────────────────────────────────────────────────────
@@ -199,6 +206,23 @@ pub fn get_obs(scene_id: u32, state_id: u32) -> Vec<f32> {
 #[wasm_bindgen]
 pub fn load_model(weights_json: &str) -> u32 {
     let weights: MLPWeights = serde_json::from_str(weights_json).expect("Invalid model JSON");
+
+    // A policy trained against a different observation layout would still run,
+    // it would just produce meaningless actions. Reject it instead.
+    let in_dim = weights
+        .layers
+        .first()
+        .and_then(|l| l.weights.first())
+        .map(|row| row.len())
+        .unwrap_or(0);
+    if in_dim != g::OBS_DIM {
+        panic!(
+            "model expects {}-dim observations but this build produces {} — retrain the agent",
+            in_dim,
+            g::OBS_DIM
+        );
+    }
+
     let mlp = SimpleMLP::from_weights(&weights);
     let id = next_id();
     MODELS.with(|m| m.borrow_mut().insert(id, mlp));

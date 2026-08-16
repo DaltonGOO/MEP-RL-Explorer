@@ -13,10 +13,11 @@ import numpy as np
 from gymnasium import spaces
 
 from grid3d import (
+    OBS_DIM,
     GeometryDTO3D,
     VoxelScene,
     build_scene,
-    get_neighbors_3d,
+    compute_obs,
     reset as grid_reset,
     step as grid_step,
 )
@@ -25,14 +26,11 @@ from mep_config import MEPConfig, DUCT
 
 class DuctRoutingEnv3D(gym.Env):
     """
-    Observation (Box, float32, shape=(12,)):
-        [x_norm, y_norm, z_norm, dx, dy, dz,
-         n_px, n_nx, n_py, n_ny, n_pz, n_nz]
-
-        x/y/z_norm  -- agent position normalized to [0, 1]
-        dx/dy/dz    -- vector to target normalized to [-1, 1]
-        n_*         -- neighbor cell types (0=empty, 1=obstacle, 3=target)
-                       divided by 3 so values stay in [0, 1]
+    Observation (Box, float32, shape=(OBS_DIM,)):
+        See :func:`grid3d.compute_obs` for the full layout. In short:
+        position, vector to target, neighbor cell types, previous action,
+        current straight-run length, whether a bend is currently allowed,
+        and which neighbors have already been visited.
 
     Action (Discrete(6)):
         0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z(up), 5=-Z(down)
@@ -50,31 +48,14 @@ class DuctRoutingEnv3D(gym.Env):
 
         self.action_space = spaces.Discrete(6)
         self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(12,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(OBS_DIM,), dtype=np.float32
         )
 
         self._state = None
         self.path: list[tuple[int, int, int]] = []
 
     def _obs(self) -> np.ndarray:
-        s = self._state
-        sc = self.scene
-
-        x_norm = s.ix / max(sc.nx - 1, 1)
-        y_norm = s.iy / max(sc.ny - 1, 1)
-        z_norm = s.iz / max(sc.nz - 1, 1)
-
-        dx = (sc.target_ijk[0] - s.ix) / max(sc.nx - 1, 1)
-        dy = (sc.target_ijk[1] - s.iy) / max(sc.ny - 1, 1)
-        dz = (sc.target_ijk[2] - s.iz) / max(sc.nz - 1, 1)
-
-        neighbors = get_neighbors_3d(sc, s.ix, s.iy, s.iz)
-        n_scaled = [v / 3.0 for v in neighbors]
-
-        return np.array(
-            [x_norm, y_norm, z_norm, dx, dy, dz] + n_scaled,
-            dtype=np.float32,
-        )
+        return compute_obs(self.scene, self._state, self.mep)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -87,7 +68,11 @@ class DuctRoutingEnv3D(gym.Env):
         self._state = result.state
         self.path.append((self._state.ix, self._state.iy, self._state.iz))
 
-        truncated = False
-        terminated = result.done
+        # Reaching the target is a real terminal state; running out of steps
+        # is a time limit. Reporting the time limit as termination tells SB3
+        # the future value there is zero, which biases the critic against the
+        # long routes the harder rooms need.
+        terminated = bool(result.info.get("reached_target", False))
+        truncated = bool(result.done and not terminated)
 
         return self._obs(), result.reward, terminated, truncated, result.info

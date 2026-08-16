@@ -16,6 +16,27 @@ fn is_vertical(action: u8) -> bool {
     action >= 4
 }
 
+/// Length of the vector produced by [`compute_obs`].
+///
+/// Must stay in sync with `OBS_DIM` in `duct_rl/python/grid3d.py` — that is
+/// the implementation the agent trains against, this is the one it plays back
+/// against.
+pub const OBS_DIM: usize = 26;
+
+/// `straight_run` is normalized against this cap in the observation; anything
+/// longer reads as 1.0.
+const STRAIGHT_RUN_CAP: u32 = 10;
+
+/// Whether a direction change would be accepted from the current state.
+///
+/// Continuing in the same direction is always allowed — this only gates turns.
+#[inline]
+pub fn bend_allowed(state: &EnvState3D, mep: &MEPConfig) -> bool {
+    mep.min_straight_before_bend == 0
+        || state.prev_action < 0
+        || state.straight_run >= mep.min_straight_before_bend
+}
+
 pub fn build_scene(dto: &GeometryDTO3D, mep: &MEPConfig) -> VoxelScene {
     let vs = mep.voxel_size_m;
     let clearance = mep.clearance_m;
@@ -114,11 +135,7 @@ pub fn step(
     let mut _bend_rejected = false;
 
     // Bend constraint
-    if mep.min_straight_before_bend > 0
-        && state.prev_action >= 0
-        && action as i32 != state.prev_action
-        && state.straight_run < mep.min_straight_before_bend
-    {
+    if action as i32 != state.prev_action && !bend_allowed(state, mep) {
         _bend_rejected = true;
         breakdown.step_penalty = mep.reward_step;
         breakdown.total = mep.reward_step;
@@ -284,30 +301,67 @@ pub fn get_neighbors(scene: &VoxelScene, ix: usize, iy: usize, iz: usize) -> [u8
     result
 }
 
-pub fn compute_obs(scene: &VoxelScene, state: &EnvState3D) -> [f32; 12] {
-    let x_norm = state.ix as f32 / (scene.nx - 1).max(1) as f32;
-    let y_norm = state.iy as f32 / (scene.ny - 1).max(1) as f32;
-    let z_norm = state.iz as f32 / (scene.nz - 1).max(1) as f32;
+/// Build the observation vector.
+///
+/// Layout (all components in [-1, 1]):
+///
+/// | index | contents                                              |
+/// |-------|-------------------------------------------------------|
+/// | 0..3  | agent position, normalized to [0, 1]                  |
+/// | 3..6  | vector to target, normalized to [-1, 1]               |
+/// | 6..12 | neighbor cell types / 3 (+X, -X, +Y, -Y, +Z, -Z)      |
+/// | 12..18| previous action, one-hot (all zero on the first step)  |
+/// | 18    | length of the current straight run, capped and scaled  |
+/// | 19    | 1.0 if a turn would be accepted right now, else 0.0    |
+/// | 20..26| 1.0 for each neighbor voxel already visited           |
+///
+/// Indices 12..26 exist because the reward function reads state the agent
+/// could not otherwise see: turn penalties depend on `prev_action`, the bend
+/// constraint on `straight_run`, and the revisit penalty on `visited`.
+pub fn compute_obs(scene: &VoxelScene, state: &EnvState3D, mep: &MEPConfig) -> [f32; OBS_DIM] {
+    let span_x = (scene.nx - 1).max(1) as f32;
+    let span_y = (scene.ny - 1).max(1) as f32;
+    let span_z = (scene.nz - 1).max(1) as f32;
 
-    let dx = (scene.target_ijk[0] as f32 - state.ix as f32) / (scene.nx - 1).max(1) as f32;
-    let dy = (scene.target_ijk[1] as f32 - state.iy as f32) / (scene.ny - 1).max(1) as f32;
-    let dz = (scene.target_ijk[2] as f32 - state.iz as f32) / (scene.nz - 1).max(1) as f32;
+    let mut obs = [0.0f32; OBS_DIM];
+
+    obs[0] = state.ix as f32 / span_x;
+    obs[1] = state.iy as f32 / span_y;
+    obs[2] = state.iz as f32 / span_z;
+
+    obs[3] = (scene.target_ijk[0] as f32 - state.ix as f32) / span_x;
+    obs[4] = (scene.target_ijk[1] as f32 - state.iy as f32) / span_y;
+    obs[5] = (scene.target_ijk[2] as f32 - state.iz as f32) / span_z;
 
     let neighbors = get_neighbors(scene, state.ix, state.iy, state.iz);
-    let n_scaled: Vec<f32> = neighbors.iter().map(|&v| v as f32 / 3.0).collect();
+    for (i, &v) in neighbors.iter().enumerate() {
+        obs[6 + i] = v as f32 / 3.0;
+    }
 
-    [
-        x_norm,
-        y_norm,
-        z_norm,
-        dx,
-        dy,
-        dz,
-        n_scaled[0],
-        n_scaled[1],
-        n_scaled[2],
-        n_scaled[3],
-        n_scaled[4],
-        n_scaled[5],
-    ]
+    if state.prev_action >= 0 {
+        obs[12 + state.prev_action as usize] = 1.0;
+    }
+
+    obs[18] = state.straight_run.min(STRAIGHT_RUN_CAP) as f32 / STRAIGHT_RUN_CAP as f32;
+    obs[19] = if bend_allowed(state, mep) { 1.0 } else { 0.0 };
+
+    for (i, (dx, dy, dz)) in DELTAS.iter().enumerate() {
+        let nix = state.ix as i32 + dx;
+        let niy = state.iy as i32 + dy;
+        let niz = state.iz as i32 + dz;
+        if nix >= 0
+            && niy >= 0
+            && niz >= 0
+            && (nix as usize) < scene.nx
+            && (niy as usize) < scene.ny
+            && (niz as usize) < scene.nz
+            && state
+                .visited
+                .contains(&(nix as usize, niy as usize, niz as usize))
+        {
+            obs[20 + i] = 1.0;
+        }
+    }
+
+    obs
 }

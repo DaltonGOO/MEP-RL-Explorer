@@ -343,7 +343,16 @@ export default function App() {
       if (mode === "agent") {
         const weightsJson = trainStore.getState().modelWeights;
         if (!weightsJson) return;
-        modelId = wasmModule.load_model(weightsJson);
+        try {
+          modelId = wasmModule.load_model(weightsJson);
+        } catch (e) {
+          // load_model rejects a policy trained against a different
+          // observation width rather than letting it emit nonsense actions.
+          trainStore
+            .getState()
+            .setFailed(`Could not load model: ${e}. Retrain the agent.`);
+          return;
+        }
       }
 
       const mep = new wasmModule.MEPConfig(
@@ -385,7 +394,7 @@ export default function App() {
 
         let action: number;
         if (mode === "agent" && modelId !== null) {
-          const obs = wasmModule.get_obs(sid, stid);
+          const obs = wasmModule.get_obs(sid, stid, mep);
           action = wasmModule.predict_action(modelId, Array.from(obs));
         } else {
           action = Math.floor(Math.random() * 6);
