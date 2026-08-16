@@ -65,6 +65,16 @@ impl MEPConfig {
     }
 }
 
+/// Look up a preset by the same key the Python side uses in `MEP_SYSTEMS`.
+pub fn preset_by_name(name: &str) -> Option<MEPConfig> {
+    match name {
+        "duct" => Some(preset_duct()),
+        "pipe" => Some(preset_pipe()),
+        "cable_tray" => Some(preset_cable_tray()),
+        _ => None,
+    }
+}
+
 // Preset constructors
 #[wasm_bindgen]
 pub fn preset_duct() -> MEPConfig {

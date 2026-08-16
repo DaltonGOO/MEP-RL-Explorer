@@ -100,6 +100,31 @@ def _is_vertical(action: int) -> bool:
     return action in _VERTICAL_ACTIONS
 
 
+# ── Observation ──────────────────────────────────────────────────────────────
+
+#: Length of the vector produced by :func:`compute_obs`.
+#:
+#: Must stay in sync with ``OBS_DIM`` in
+#: ``duct_rl/web/crate/src/grid3d.rs`` — this is the implementation the agent
+#: trains against, that is the one it plays back against in the browser.
+OBS_DIM = 26
+
+#: ``straight_run`` is normalized against this cap in the observation;
+#: anything longer reads as 1.0.
+STRAIGHT_RUN_CAP = 10
+
+
+def bend_allowed(state: EnvState3D, mep: MEPConfig) -> bool:
+    """Whether a direction change would be accepted from the current state.
+
+    Continuing in the same direction is always allowed -- this only gates
+    turns.
+    """
+    return (mep.min_straight_before_bend == 0
+            or state.prev_action < 0
+            or state.straight_run >= mep.min_straight_before_bend)
+
+
 # ── Build Scene ──────────────────────────────────────────────────────────────
 
 def build_scene(dto: GeometryDTO3D, mep: MEPConfig) -> VoxelScene:
@@ -182,10 +207,7 @@ def step(scene: VoxelScene, state: EnvState3D, action: int,
             "steps": state.steps, "bend_rejected": False}
 
     # Bend constraint: reject turn if straight_run < min_straight_before_bend
-    if (mep.min_straight_before_bend > 0
-            and state.prev_action >= 0
-            and action != state.prev_action
-            and state.straight_run < mep.min_straight_before_bend):
+    if action != state.prev_action and not bend_allowed(state, mep):
         # Reject the turn — treat like a wasted step
         info["bend_rejected"] = True
         reward = mep.reward_step
@@ -270,6 +292,60 @@ def step(scene: VoxelScene, state: EnvState3D, action: int,
         return StepResult3D(state, reward, True, info)
 
     return StepResult3D(state, reward, False, info)
+
+
+def compute_obs(scene: VoxelScene, state: EnvState3D,
+                mep: MEPConfig) -> np.ndarray:
+    """Build the observation vector.
+
+    Layout (all components in [-1, 1]):
+
+        index    contents
+        0..3     agent position, normalized to [0, 1]
+        3..6     vector to target, normalized to [-1, 1]
+        6..12    neighbor cell types / 3 (+X, -X, +Y, -Y, +Z, -Z)
+        12..18   previous action, one-hot (all zero on the first step)
+        18       length of the current straight run, capped and scaled
+        19       1.0 if a turn would be accepted right now, else 0.0
+        20..26   1.0 for each neighbor voxel already visited
+
+    Indices 12..26 exist because the reward function reads state the agent
+    could not otherwise see: turn penalties depend on ``prev_action``, the
+    bend constraint on ``straight_run``, and the revisit penalty on
+    ``visited``.
+    """
+    span_x = max(scene.nx - 1, 1)
+    span_y = max(scene.ny - 1, 1)
+    span_z = max(scene.nz - 1, 1)
+
+    obs = np.zeros(OBS_DIM, dtype=np.float32)
+
+    obs[0] = state.ix / span_x
+    obs[1] = state.iy / span_y
+    obs[2] = state.iz / span_z
+
+    obs[3] = (scene.target_ijk[0] - state.ix) / span_x
+    obs[4] = (scene.target_ijk[1] - state.iy) / span_y
+    obs[5] = (scene.target_ijk[2] - state.iz) / span_z
+
+    neighbors = get_neighbors_3d(scene, state.ix, state.iy, state.iz)
+    for i, v in enumerate(neighbors):
+        obs[6 + i] = v / 3.0
+
+    if state.prev_action >= 0:
+        obs[12 + state.prev_action] = 1.0
+
+    obs[18] = min(state.straight_run, STRAIGHT_RUN_CAP) / STRAIGHT_RUN_CAP
+    obs[19] = 1.0 if bend_allowed(state, mep) else 0.0
+
+    for i, (dx, dy, dz) in _DELTAS_3D.items():
+        nix, niy, niz = state.ix + dx, state.iy + dy, state.iz + dz
+        if (0 <= nix < scene.nx and 0 <= niy < scene.ny
+                and 0 <= niz < scene.nz
+                and (nix, niy, niz) in state.visited):
+            obs[20 + i] = 1.0
+
+    return obs
 
 
 def get_neighbors_3d(scene: VoxelScene, ix: int, iy: int,
