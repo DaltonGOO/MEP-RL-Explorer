@@ -20,6 +20,9 @@ pub struct MEPConfig {
 
 #[wasm_bindgen]
 impl MEPConfig {
+    // The parameter list mirrors the struct fields one-for-one; wasm_bindgen
+    // constructors can't take a struct literal from JS.
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(constructor)]
     pub fn new(
         cross_section_mm: f64,

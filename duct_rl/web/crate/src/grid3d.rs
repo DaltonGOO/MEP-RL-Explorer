@@ -297,7 +297,17 @@ pub fn compute_obs(scene: &VoxelScene, state: &EnvState3D) -> [f32; 12] {
     let n_scaled: Vec<f32> = neighbors.iter().map(|&v| v as f32 / 3.0).collect();
 
     [
-        x_norm, y_norm, z_norm, dx, dy, dz, n_scaled[0], n_scaled[1], n_scaled[2], n_scaled[3],
-        n_scaled[4], n_scaled[5],
+        x_norm,
+        y_norm,
+        z_norm,
+        dx,
+        dy,
+        dz,
+        n_scaled[0],
+        n_scaled[1],
+        n_scaled[2],
+        n_scaled[3],
+        n_scaled[4],
+        n_scaled[5],
     ]
 }

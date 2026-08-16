@@ -16,11 +16,16 @@ use types::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+// clippy wants `const { .. }` initializers here, but `HashMap::new` is not
+// const-callable (RandomState::new isn't), so only NEXT_ID can take one.
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static SCENES: RefCell<HashMap<u32, VoxelScene>> = RefCell::new(HashMap::new());
+    #[allow(clippy::missing_const_for_thread_local)]
     static STATES: RefCell<HashMap<u32, EnvState3D>> = RefCell::new(HashMap::new());
+    #[allow(clippy::missing_const_for_thread_local)]
     static MODELS: RefCell<HashMap<u32, SimpleMLP>> = RefCell::new(HashMap::new());
-    static NEXT_ID: RefCell<u32> = RefCell::new(1);
+    static NEXT_ID: RefCell<u32> = const { RefCell::new(1) };
 }
 
 fn next_id() -> u32 {
@@ -51,8 +56,7 @@ pub fn create_scene(room_name: &str, mep: &MEPConfig) -> u32 {
 
 #[wasm_bindgen]
 pub fn create_scene_from_json(geometry_json: &str, mep: &MEPConfig) -> u32 {
-    let dto: GeometryDTO3D = serde_json::from_str(geometry_json)
-        .expect("Invalid geometry JSON");
+    let dto: GeometryDTO3D = serde_json::from_str(geometry_json).expect("Invalid geometry JSON");
     let scene = g::build_scene(&dto, mep);
     let id = next_id();
     SCENES.with(|s| s.borrow_mut().insert(id, scene));
