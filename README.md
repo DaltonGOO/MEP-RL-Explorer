@@ -74,9 +74,12 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ```bash
 cd duct_rl/web/crate
 wasm-pack build --target web --release
+git checkout -- pkg/.gitignore pkg/package.json   # see below
 ```
 
 Requires [Rust](https://rustup.rs/) and [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/).
+
+`wasm-pack` overwrites `pkg/.gitignore` with its own "ignore everything" default, which would drop the committed WASM package from version control. The repo's version is an allowlist that keeps the four build artifacts tracked — restore it after every rebuild.
 
 ### Standalone Python
 
@@ -104,7 +107,22 @@ All parameters are adjustable from the UI at runtime.
 - **Collisions don't terminate episodes** — the agent bounces back with a penalty, encouraging it to learn avoidance rather than just dying
 - **Distance shaping** — +1 reward for moving closer to target (Manhattan distance), -1 for moving farther
 - **6-action space** — +X, -X, +Y, -Y, +Z, -Z movement on a voxel grid
+- **The observation exposes everything the reward reads** — turn penalties depend on the previous action, the bend constraint on the current straight run, and the revisit penalty on visited voxels, so all three are in the observation vector. Without them the agent is guessing at rules it's being scored on.
 - **WASM pkg committed** — users never need a Rust toolchain; the 162KB binary is version-controlled
+
+### Observation vector (26 floats, all in [-1, 1])
+
+| Index | Contents |
+|-------|----------|
+| 0–2 | Agent position, normalized |
+| 3–5 | Vector to target, normalized |
+| 6–11 | Neighbor cell types (+X, -X, +Y, -Y, +Z, -Z) |
+| 12–17 | Previous action, one-hot |
+| 18 | Length of the current straight run |
+| 19 | Whether a turn would be accepted right now |
+| 20–25 | Which neighbor voxels have already been visited |
+
+Defined twice — `duct_rl/python/grid3d.py` (training) and `duct_rl/web/crate/src/grid3d.rs` (browser playback). `duct_rl/testdata/obs_parity.json` records observations from fixed action sequences, and both test suites replay them, so the two implementations can't drift apart silently. Regenerate it with `python gen_obs_parity.py` after any intentional change.
 
 ## Tech Stack
 
