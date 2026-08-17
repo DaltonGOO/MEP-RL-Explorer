@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, useState, useCallback, createContext, useContext } from "react";
+import React, { useRef, useMemo, useLayoutEffect, useState, useCallback, createContext, useContext } from "react";
 import { Canvas, useThree, ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, Line } from "@react-three/drei";
 import * as THREE from "three";
@@ -159,11 +159,20 @@ function VoxelObstacles() {
   const sceneInfo = useSimStore((s) => s.sceneInfo);
   const meshRef = useRef<THREE.InstancedMesh>(null);
 
-  useMemo(() => {
-    if (!meshRef.current || !obstaclePositions || !sceneInfo) return;
+  // This has to be a layout effect, not useMemo. The matrices are written
+  // through meshRef, and React only populates a ref at commit — during render
+  // it is still null. So the first Build Scene wrote nothing, the mesh kept
+  // its identity matrices, and every obstacle voxel collapsed onto the
+  // origin. It only looked correct after a second build, when the ref
+  // happened to still hold the previous render's mesh.
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh || !obstaclePositions || !sceneInfo) return;
+
     const vs = sceneInfo.voxel_size;
     const count = obstaclePositions.length / 3;
     const matrix = new THREE.Matrix4();
+    const scale = new THREE.Vector3(vs * 0.95, vs * 0.95, vs * 0.95);
 
     for (let i = 0; i < count; i++) {
       matrix.makeTranslation(
@@ -171,10 +180,10 @@ function VoxelObstacles() {
         obstaclePositions[i * 3 + 2],
         obstaclePositions[i * 3 + 1]
       );
-      matrix.scale(new THREE.Vector3(vs * 0.95, vs * 0.95, vs * 0.95));
-      meshRef.current.setMatrixAt(i, matrix);
+      matrix.scale(scale);
+      mesh.setMatrixAt(i, matrix);
     }
-    meshRef.current.instanceMatrix.needsUpdate = true;
+    mesh.instanceMatrix.needsUpdate = true;
   }, [obstaclePositions, sceneInfo]);
 
   if (!obstaclePositions || !sceneInfo) return null;
