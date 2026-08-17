@@ -53,7 +53,12 @@ export default function TrainingDashboard() {
       timestep: m.timestep,
       reward: m.ep_rew_mean,
       length: m.ep_len_mean,
+      // Plotted as a percentage on its own axis — reward and success rate
+      // don't share a scale.
+      success: m.success_rate != null ? m.success_rate * 100 : null,
     }));
+
+  const latest = data.length ? data[data.length - 1] : null;
 
   return (
     <div style={styles.container}>
@@ -95,7 +100,14 @@ export default function TrainingDashboard() {
               tick={{ fontSize: 10, fill: "#666" }}
               tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`}
             />
-            <YAxis tick={{ fontSize: 10, fill: "#666" }} />
+            <YAxis yAxisId="reward" tick={{ fontSize: 10, fill: "#666" }} />
+            <YAxis
+              yAxisId="success"
+              orientation="right"
+              domain={[0, 100]}
+              tick={{ fontSize: 10, fill: "#666" }}
+              tickFormatter={(v: number) => `${v}%`}
+            />
             <Tooltip
               contentStyle={{
                 background: "#1a1a2e",
@@ -104,12 +116,23 @@ export default function TrainingDashboard() {
               }}
             />
             <Line
+              yAxisId="reward"
               type="monotone"
               dataKey="reward"
               stroke="#4488ff"
               strokeWidth={2}
               dot={false}
               name="Avg Reward"
+            />
+            <Line
+              yAxisId="success"
+              type="monotone"
+              dataKey="success"
+              stroke="#32cd32"
+              strokeWidth={2}
+              dot={false}
+              connectNulls
+              name="Reached Target %"
             />
           </LineChart>
         </ResponsiveContainer>
@@ -118,7 +141,10 @@ export default function TrainingDashboard() {
       {data.length > 0 && (
         <div style={{ display: "flex", gap: "16px", marginTop: "4px", fontSize: "11px", color: "#888" }}>
           <span>Points: {data.length}</span>
-          <span>Latest reward: <span style={{ color: "#4488ff" }}>{data[data.length - 1].reward?.toFixed(1)}</span></span>
+          <span>Latest reward: <span style={{ color: "#4488ff" }}>{latest?.reward?.toFixed(1)}</span></span>
+          {latest?.success != null && (
+            <span>Reached target: <span style={{ color: "#32cd32" }}>{latest.success.toFixed(0)}%</span></span>
+          )}
         </div>
       )}
     </div>

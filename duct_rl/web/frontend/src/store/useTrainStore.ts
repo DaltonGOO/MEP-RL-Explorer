@@ -4,6 +4,8 @@ export interface TrainMetric {
   timestep: number;
   ep_rew_mean: number | null;
   ep_len_mean: number | null;
+  /** Fraction of episodes that actually reached the target, 0–1. */
+  success_rate?: number | null;
 }
 
 export interface TrainState {

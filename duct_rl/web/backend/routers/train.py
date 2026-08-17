@@ -23,6 +23,7 @@ async def train(req: TrainRequest):
         learning_rate=req.learning_rate,
         n_steps=req.n_steps,
         batch_size=req.batch_size,
+        seed=req.seed,
     )
     return {"job_id": job_id}
 
@@ -42,6 +43,9 @@ async def get_train_status(job_id: str):
         "metrics": job.metrics[-10:],  # last 10 data points
         "model_path": job.model_path,
         "error": job.error,
+        "seed": job.seed,
+        "best_eval_reward": job.best_eval_reward,
+        "used_best_checkpoint": job.used_best_checkpoint,
     }
 
 
