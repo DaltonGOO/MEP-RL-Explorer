@@ -1,6 +1,98 @@
 use mep_routing_core::grid3d::*;
 use mep_routing_core::mep_config::*;
 use mep_routing_core::rooms::*;
+use mep_routing_core::types::GeometryDTO3D;
+
+/// Sum of the per-component fields, which must always equal `total`.
+fn breakdown_sum(b: &mep_routing_core::types::RewardBreakdown) -> f64 {
+    b.step_penalty
+        + b.distance_delta
+        + b.turn_penalty
+        + b.vertical_penalty
+        + b.revisit_penalty
+        + b.collision_penalty
+        + b.target_bonus
+}
+
+#[test]
+fn test_reward_breakdown_sums_on_every_step() {
+    // The old test only checked the first step of one episode, which is why
+    // it never caught the target branch reporting components it didn't award.
+    let meps = [preset_duct(), preset_pipe(), preset_cable_tray()];
+    for name in room_names() {
+        for mep in &meps {
+            let scene = build_scene(&get_room(name).unwrap(), mep);
+            let mut state = reset(&scene);
+            for i in 0..150u32 {
+                let result = step(&scene, &mut state, (i % 6) as u8, mep);
+                let b = &result.breakdown;
+                assert!(
+                    (b.total - breakdown_sum(b)).abs() < 1e-10,
+                    "{name}/{i}: components sum to {} but total is {}",
+                    breakdown_sum(b),
+                    b.total
+                );
+                assert!(
+                    (b.total - result.reward).abs() < 1e-10,
+                    "{name}/{i}: breakdown total {} != awarded reward {}",
+                    b.total,
+                    result.reward
+                );
+                if result.done {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_reward_breakdown_on_the_winning_step() {
+    // None of the preset rooms are winnable by a fixed action sequence, so
+    // the step that reaches the target — the one branch that was wrong —
+    // needs a room small enough to cross in a straight line.
+    let mep = preset_duct();
+    let dto = GeometryDTO3D {
+        room_min: [0.0, 0.0, 0.0],
+        room_max: [3.0, 3.0, 3.0],
+        obstacles: vec![],
+        start: [0.2, 0.2, 0.2],
+        target: [1.0, 0.2, 0.2],
+    };
+    let scene = build_scene(&dto, &mep);
+    let mut state = reset(&scene);
+
+    let mut reached = false;
+    for _ in 0..20 {
+        let result = step(&scene, &mut state, 0, &mep); // straight +X
+        let b = &result.breakdown;
+        assert!(
+            (b.total - breakdown_sum(b)).abs() < 1e-10,
+            "components sum to {} but total is {}",
+            breakdown_sum(b),
+            b.total
+        );
+        if result.reached_target {
+            reached = true;
+            // The whole reward on this step is the target bonus.
+            assert_eq!(b.target_bonus, mep.reward_target);
+            assert_eq!(b.total, mep.reward_target);
+            assert_eq!(result.reward, mep.reward_target);
+            // Nothing else may be reported — it wasn't awarded.
+            assert_eq!(b.step_penalty, 0.0, "step penalty was not awarded");
+            assert_eq!(b.distance_delta, 0.0, "distance delta was not awarded");
+            assert_eq!(b.turn_penalty, 0.0);
+            assert_eq!(b.vertical_penalty, 0.0);
+            assert_eq!(b.revisit_penalty, 0.0);
+            assert_eq!(b.collision_penalty, 0.0);
+            break;
+        }
+    }
+    assert!(
+        reached,
+        "test needs an episode that actually reaches the target"
+    );
+}
 
 #[test]
 fn test_obs_has_expected_width() {
