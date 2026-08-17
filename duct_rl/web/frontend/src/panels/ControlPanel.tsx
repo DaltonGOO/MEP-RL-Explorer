@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSimStore, MEPParams } from "../store/useSimStore";
 import { useTrainStore } from "../store/useTrainStore";
 import LayoutBuilder from "./LayoutBuilder";
@@ -160,15 +160,23 @@ const styles = {
   },
 };
 
+interface SavedModel {
+  model_id: string;
+  mep: string;
+  room: string;
+  filename: string;
+}
+
 interface Props {
   onBuildScene: () => void;
   onTrain: (timesteps: number) => void;
   onPlay: (mode: "random" | "agent") => void;
   onStop: () => void;
   onReset: () => void;
+  onLoadModel: (filename: string) => void;
 }
 
-export default function ControlPanel({ onBuildScene, onTrain, onPlay, onStop, onReset }: Props) {
+export default function ControlPanel({ onBuildScene, onTrain, onPlay, onStop, onReset, onLoadModel }: Props) {
   const layoutMode = useSimStore((s) => s.layoutMode);
   const setLayoutMode = useSimStore((s) => s.setLayoutMode);
   const room = useSimStore((s) => s.room);
@@ -189,8 +197,28 @@ export default function ControlPanel({ onBuildScene, onTrain, onPlay, onStop, on
   const trainStatus = useTrainStore((s) => s.status);
   const trainProgress = useTrainStore((s) => s.progress);
   const modelWeights = useTrainStore((s) => s.modelWeights);
+  const trainError = useTrainStore((s) => s.error);
 
   const [timesteps, setTimesteps] = useState(50000);
+  const [savedModels, setSavedModels] = useState<SavedModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+
+  // Refresh the saved-model list on mount and whenever a run finishes.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/models")
+      .then((r) => (r.ok ? r.json() : { models: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        const models: SavedModel[] = d.models ?? [];
+        setSavedModels(models);
+        setSelectedModel((cur) =>
+          cur || (models.length ? models[models.length - 1].filename : "")
+        );
+      })
+      .catch(() => { /* backend not running — training is unavailable anyway */ });
+    return () => { cancelled = true; };
+  }, [trainStatus]);
 
   const handlePreset = (preset: string) => {
     setMepPreset(preset);
@@ -324,6 +352,39 @@ export default function ControlPanel({ onBuildScene, onTrain, onPlay, onStop, on
               Training complete — model ready
             </div>
           )}
+          {trainStatus === "failed" && (
+            <div style={{ fontSize: "11px", color: "#ff4444", marginTop: "4px" }}>
+              {trainError}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Saved models — a trained policy outlives the page that made it */}
+      {sceneId !== null && savedModels.length > 0 && (
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>Saved Models</div>
+          <select
+            style={styles.select}
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+          >
+            {savedModels.map((m) => (
+              <option key={m.filename} value={m.filename}>
+                {m.room} · {m.mep} · {m.model_id}
+              </option>
+            ))}
+          </select>
+          <button
+            style={{ ...styles.btn("secondary"), marginTop: "6px" }}
+            onClick={() => selectedModel && onLoadModel(selectedModel)}
+          >
+            Load for Playback
+          </button>
+          <div style={{ fontSize: "10px", color: "#666", marginTop: "6px" }}>
+            Build the matching room first — a policy trained on one layout
+            will not route another.
+          </div>
         </div>
       )}
 
