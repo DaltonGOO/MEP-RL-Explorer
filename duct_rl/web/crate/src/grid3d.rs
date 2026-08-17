@@ -255,8 +255,16 @@ pub fn step(
     // Reached target?
     if cell == 3 {
         _reached_target = true;
-        breakdown.target_bonus = mep.reward_target;
-        breakdown.total = mep.reward_target;
+        // Reaching the target pays exactly reward_target — the step penalty,
+        // distance delta and turn costs accumulated above are deliberately
+        // discarded (the Python env does the same). Clear them from the
+        // breakdown too, otherwise it reports components that were never
+        // awarded and its own total contradicts the rows above it.
+        breakdown = RewardBreakdown {
+            target_bonus: mep.reward_target,
+            total: mep.reward_target,
+            ..Default::default()
+        };
         return StepResult3D {
             state: state.clone(),
             reward: mep.reward_target,
