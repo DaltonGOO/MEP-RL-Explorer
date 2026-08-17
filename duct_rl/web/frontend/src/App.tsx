@@ -367,6 +367,23 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * Loads a previously trained model's weights into the playback store.
+   * Without this the backend's saved models are unreachable — weights only
+   * ever arrived over a live training run's WebSocket, so a good policy was
+   * lost the moment the page reloaded.
+   */
+  const handleLoadModel = useCallback(async (filename: string) => {
+    try {
+      const res = await fetch(`${API}/models/${filename}/weights`);
+      if (!res.ok) throw new Error(`no exported weights (HTTP ${res.status})`);
+      const weights = await res.json();
+      trainStore.getState().setCompleted(JSON.stringify(weights));
+    } catch (e) {
+      trainStore.getState().setFailed(`Could not load ${filename}: ${e}`);
+    }
+  }, []);
+
   const handlePlay = useCallback(
     (mode: "random" | "agent") => {
       if (!wasmModule) return;
@@ -473,6 +490,7 @@ export default function App() {
           onPlay={handlePlay}
           onStop={handleStop}
           onReset={handleReset}
+          onLoadModel={handleLoadModel}
         />
       </div>
 
