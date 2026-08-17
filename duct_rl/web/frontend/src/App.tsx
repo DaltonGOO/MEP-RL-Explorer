@@ -106,20 +106,88 @@ export default function App() {
   const customLayout = useSimStore((s) => s.customLayout);
   const layoutMode = useSimStore((s) => s.layoutMode);
 
+  // ── WASM handle lifecycle ─────────────────────────────────────────────────
+  // Scenes, episode states, models and MEPConfigs all live in WASM memory
+  // behind handles. Dropping one without freeing it strands the allocation
+  // for the life of the page, and these are not small — a multi_floor scene
+  // is ~28k voxels, and an episode state holds a visited set that grows to
+  // max_steps entries.
+
+  const modelIdRef = useRef<number | null>(null);
+  const mepRef = useRef<any>(null);
+
+  const makeMep = useCallback((wasm: any) => {
+    const p = store.getState().mepParams;
+    return new wasm.MEPConfig(
+      p.cross_section_mm, p.clearance_m, p.voxel_size_m,
+      p.reward_target, p.reward_step, p.reward_collision,
+      p.reward_turn_horizontal, p.reward_turn_vertical,
+      p.reward_vertical_per_voxel, p.reward_revisit,
+      p.max_steps, p.min_straight_before_bend,
+    );
+  }, []);
+
+  /** Stops playback and releases the model and MEPConfig it was using. */
+  const endPlayback = useCallback((wasm: any) => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (modelIdRef.current !== null) {
+      wasm.free_model(modelIdRef.current);
+      modelIdRef.current = null;
+    }
+    if (mepRef.current !== null) {
+      mepRef.current.free();
+      mepRef.current = null;
+    }
+  }, []);
+
+  /** Releases the current scene and its episode state. */
+  const disposeScene = useCallback((wasm: any) => {
+    const { sceneId, stateId } = store.getState();
+    if (stateId !== null) wasm.free_state(stateId);
+    if (sceneId !== null) wasm.free_scene(sceneId);
+    store.getState().resetEpisode(); // also clears stateId
+  }, []);
+
+  /**
+   * Starts a fresh episode, releasing the previous one's state, and seeds
+   * the path with the start voxel.
+   */
+  const beginEpisode = useCallback((wasm: any, sceneId: number) => {
+    const prev = store.getState().stateId;
+    if (prev !== null) wasm.free_state(prev);
+    store.getState().resetEpisode();
+
+    const stateId = wasm.reset_episode(sceneId);
+    store.getState().setStateId(stateId);
+
+    const pos = wasm.get_state_position(stateId);
+    store.getState().addStep({
+      position: [pos[0], pos[1], pos[2]],
+      reward: 0,
+      breakdown: {
+        step_penalty: 0, distance_delta: 0, turn_penalty: 0,
+        vertical_penalty: 0, revisit_penalty: 0, collision_penalty: 0,
+        target_bonus: 0, total: 0,
+      },
+      action: -1,
+    });
+    return stateId;
+  }, []);
+
   useEffect(() => {
     if (layoutMode !== "custom" || !wasmModule) return;
 
     if (liveDebounceRef.current) clearTimeout(liveDebounceRef.current);
     liveDebounceRef.current = window.setTimeout(() => {
+      // This runs on every debounced edit — once per 250ms while dragging an
+      // obstacle — so failing to release the previous scene here leaked one
+      // scene and one episode state per tick.
+      let mep: any = null;
       try {
-        const { mepParams } = store.getState();
-        const mep = new wasmModule.MEPConfig(
-          mepParams.cross_section_mm, mepParams.clearance_m, mepParams.voxel_size_m,
-          mepParams.reward_target, mepParams.reward_step, mepParams.reward_collision,
-          mepParams.reward_turn_horizontal, mepParams.reward_turn_vertical,
-          mepParams.reward_vertical_per_voxel, mepParams.reward_revisit,
-          mepParams.max_steps, mepParams.min_straight_before_bend,
-        );
+        mep = makeMep(wasmModule);
         const geometryJson = JSON.stringify({
           room_min: customLayout.room_min,
           room_max: customLayout.room_max,
@@ -127,35 +195,32 @@ export default function App() {
           start: customLayout.start,
           target: customLayout.target,
         });
+        disposeScene(wasmModule);
         const sceneId = wasmModule.create_scene_from_json(geometryJson, mep);
         const info = fromWasm(wasmModule.get_scene_info(sceneId));
         const obstacles = new Float32Array(wasmModule.get_obstacle_positions(sceneId));
         store.getState().setScene(sceneId, info, obstacles);
-
-        // Reset episode to show start position
-        store.getState().resetEpisode();
-        const stateId = wasmModule.reset_episode(sceneId);
-        store.getState().setStateId(stateId);
-        const pos = wasmModule.get_state_position(stateId);
-        store.getState().addStep({
-          position: [pos[0], pos[1], pos[2]],
-          reward: 0,
-          breakdown: {
-            step_penalty: 0, distance_delta: 0, turn_penalty: 0,
-            vertical_penalty: 0, revisit_penalty: 0, collision_penalty: 0,
-            target_bonus: 0, total: 0,
-          },
-          action: -1,
-        });
+        beginEpisode(wasmModule, sceneId);
       } catch (e) {
         console.warn("Live preview error:", e);
+      } finally {
+        if (mep) mep.free();
       }
     }, 250);
 
     return () => {
       if (liveDebounceRef.current) clearTimeout(liveDebounceRef.current);
     };
-  }, [customLayout, layoutMode, wasmModule]);
+  }, [customLayout, layoutMode, wasmModule, makeMep, disposeScene, beginEpisode]);
+
+  // Release everything still held when the app unmounts.
+  useEffect(() => {
+    return () => {
+      if (!wasmModule) return;
+      endPlayback(wasmModule);
+      disposeScene(wasmModule);
+    };
+  }, [wasmModule, endPlayback, disposeScene]);
 
   // Initialize WASM
   useEffect(() => {
@@ -174,62 +239,37 @@ export default function App() {
 
   const handleBuildScene = useCallback(() => {
     if (!wasmModule) return;
-    const { layoutMode, room, customLayout, mepParams } = store.getState();
+    const { layoutMode, room, customLayout } = store.getState();
 
-    // Create MEPConfig in WASM
-    const mep = new wasmModule.MEPConfig(
-      mepParams.cross_section_mm,
-      mepParams.clearance_m,
-      mepParams.voxel_size_m,
-      mepParams.reward_target,
-      mepParams.reward_step,
-      mepParams.reward_collision,
-      mepParams.reward_turn_horizontal,
-      mepParams.reward_turn_vertical,
-      mepParams.reward_vertical_per_voxel,
-      mepParams.reward_revisit,
-      mepParams.max_steps,
-      mepParams.min_straight_before_bend
-    );
+    const mep = makeMep(wasmModule);
+    try {
+      // Any in-flight playback holds handles of its own.
+      endPlayback(wasmModule);
+      store.getState().setPlaying(false);
+      disposeScene(wasmModule);
 
-    let sceneId: number;
-    if (layoutMode === "custom") {
-      const geometryJson = JSON.stringify({
-        room_min: customLayout.room_min,
-        room_max: customLayout.room_max,
-        obstacles: customLayout.obstacles,
-        start: customLayout.start,
-        target: customLayout.target,
-      });
-      sceneId = wasmModule.create_scene_from_json(geometryJson, mep);
-    } else {
-      sceneId = wasmModule.create_scene(room, mep);
+      let sceneId: number;
+      if (layoutMode === "custom") {
+        const geometryJson = JSON.stringify({
+          room_min: customLayout.room_min,
+          room_max: customLayout.room_max,
+          obstacles: customLayout.obstacles,
+          start: customLayout.start,
+          target: customLayout.target,
+        });
+        sceneId = wasmModule.create_scene_from_json(geometryJson, mep);
+      } else {
+        sceneId = wasmModule.create_scene(room, mep);
+      }
+      const info = fromWasm(wasmModule.get_scene_info(sceneId));
+      const obstacles = new Float32Array(wasmModule.get_obstacle_positions(sceneId));
+
+      store.getState().setScene(sceneId, info, obstacles);
+      beginEpisode(wasmModule, sceneId);
+    } finally {
+      mep.free();
     }
-    const info = fromWasm(wasmModule.get_scene_info(sceneId));
-    const obstacles = new Float32Array(wasmModule.get_obstacle_positions(sceneId));
-
-    store.getState().setScene(sceneId, info, obstacles);
-
-    // Auto-reset episode
-    const stateId = wasmModule.reset_episode(sceneId);
-    store.getState().setStateId(stateId);
-    store.getState().resetEpisode();
-    const stateId2 = wasmModule.reset_episode(sceneId);
-    store.getState().setStateId(stateId2);
-
-    // Add start position to path
-    const pos = wasmModule.get_state_position(stateId2);
-    store.getState().addStep({
-      position: [pos[0], pos[1], pos[2]],
-      reward: 0,
-      breakdown: {
-        step_penalty: 0, distance_delta: 0, turn_penalty: 0,
-        vertical_penalty: 0, revisit_penalty: 0, collision_penalty: 0,
-        target_bonus: 0, total: 0,
-      },
-      action: -1,
-    });
-  }, [wasmModule]);
+  }, [wasmModule, makeMep, endPlayback, disposeScene, beginEpisode]);
 
   const handleTrain = useCallback(async (timesteps: number) => {
     const { layoutMode, room, customLayout, mepParams } = store.getState();
@@ -330,21 +370,17 @@ export default function App() {
   const handlePlay = useCallback(
     (mode: "random" | "agent") => {
       if (!wasmModule) return;
-      const { sceneId, mepParams } = store.getState();
+      const { sceneId } = store.getState();
       if (sceneId === null) return;
 
-      // Reset episode
-      store.getState().resetEpisode();
-      const stateId = wasmModule.reset_episode(sceneId);
-      store.getState().setStateId(stateId);
+      // Whatever the last playback held is dead now.
+      endPlayback(wasmModule);
 
-      // Load model if agent mode
-      let modelId: number | null = null;
       if (mode === "agent") {
         const weightsJson = trainStore.getState().modelWeights;
         if (!weightsJson) return;
         try {
-          modelId = wasmModule.load_model(weightsJson);
+          modelIdRef.current = wasmModule.load_model(weightsJson);
         } catch (e) {
           // load_model rejects a policy trained against a different
           // observation width rather than letting it emit nonsense actions.
@@ -355,43 +391,22 @@ export default function App() {
         }
       }
 
-      const mep = new wasmModule.MEPConfig(
-        mepParams.cross_section_mm,
-        mepParams.clearance_m,
-        mepParams.voxel_size_m,
-        mepParams.reward_target,
-        mepParams.reward_step,
-        mepParams.reward_collision,
-        mepParams.reward_turn_horizontal,
-        mepParams.reward_turn_vertical,
-        mepParams.reward_vertical_per_voxel,
-        mepParams.reward_revisit,
-        mepParams.max_steps,
-        mepParams.min_straight_before_bend
-      );
+      // Held for the whole episode — stepFn reads it on every tick — so it is
+      // released by endPlayback rather than here.
+      const mep = makeMep(wasmModule);
+      mepRef.current = mep;
 
-      // Add start position
-      const startPos = wasmModule.get_state_position(stateId);
-      store.getState().addStep({
-        position: [startPos[0], startPos[1], startPos[2]],
-        reward: 0,
-        breakdown: {
-          step_penalty: 0, distance_delta: 0, turn_penalty: 0,
-          vertical_penalty: 0, revisit_penalty: 0, collision_penalty: 0,
-          target_bonus: 0, total: 0,
-        },
-        action: -1,
-      });
-
+      beginEpisode(wasmModule, sceneId);
       store.getState().setPlaying(true);
 
       const stepFn = () => {
         const { sceneId: sid, stateId: stid, isPlaying, isDone } = store.getState();
         if (!isPlaying || isDone || sid === null || stid === null) {
-          if (modelId !== null) wasmModule.free_model(modelId);
+          endPlayback(wasmModule);
           return;
         }
 
+        const modelId = modelIdRef.current;
         let action: number;
         if (mode === "agent" && modelId !== null) {
           const obs = wasmModule.get_obs(sid, stid, mep);
@@ -411,7 +426,7 @@ export default function App() {
 
         if (result.done) {
           store.getState().setDone(true, result.reached_target);
-          if (modelId !== null) wasmModule.free_model(modelId);
+          endPlayback(wasmModule);
           return;
         }
 
@@ -420,38 +435,25 @@ export default function App() {
 
       timerRef.current = window.setTimeout(stepFn, store.getState().playSpeed);
     },
-    [wasmModule]
+    [wasmModule, makeMep, endPlayback, beginEpisode]
   );
 
   const handleStop = useCallback(() => {
     store.getState().setPlaying(false);
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
+    // Clearing the timer means stepFn never runs again, so this is the only
+    // place left that can release the model and MEPConfig it was using.
+    if (wasmModule) endPlayback(wasmModule);
+  }, [wasmModule, endPlayback]);
 
   const handleReset = useCallback(() => {
     if (!wasmModule) return;
     const { sceneId } = store.getState();
     if (sceneId === null) return;
 
-    store.getState().resetEpisode();
-    const stateId = wasmModule.reset_episode(sceneId);
-    store.getState().setStateId(stateId);
-
-    const pos = wasmModule.get_state_position(stateId);
-    store.getState().addStep({
-      position: [pos[0], pos[1], pos[2]],
-      reward: 0,
-      breakdown: {
-        step_penalty: 0, distance_delta: 0, turn_penalty: 0,
-        vertical_penalty: 0, revisit_penalty: 0, collision_penalty: 0,
-        target_bonus: 0, total: 0,
-      },
-      action: -1,
-    });
-  }, [wasmModule]);
+    endPlayback(wasmModule);
+    store.getState().setPlaying(false);
+    beginEpisode(wasmModule, sceneId);
+  }, [wasmModule, endPlayback, beginEpisode]);
 
   return (
     <div style={styles.layout}>
