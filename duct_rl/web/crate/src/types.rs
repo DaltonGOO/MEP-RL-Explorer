@@ -42,7 +42,7 @@ pub struct VoxelScene {
     pub nx: usize,
     pub ny: usize,
     pub nz: usize,
-    pub voxels: Vec<u8>, // flat array: voxels[iz * ny * nx + iy * nx + ix]
+    pub voxels: Vec<u8>,       // flat array: voxels[iz * ny * nx + iy * nx + ix]
     pub start_ijk: [usize; 3], // (ix, iy, iz)
     pub target_ijk: [usize; 3],
     pub origin: [f64; 3],

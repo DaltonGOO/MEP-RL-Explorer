@@ -16,11 +16,16 @@ use types::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+// clippy wants `const { .. }` initializers here, but `HashMap::new` is not
+// const-callable (RandomState::new isn't), so only NEXT_ID can take one.
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static SCENES: RefCell<HashMap<u32, VoxelScene>> = RefCell::new(HashMap::new());
+    #[allow(clippy::missing_const_for_thread_local)]
     static STATES: RefCell<HashMap<u32, EnvState3D>> = RefCell::new(HashMap::new());
+    #[allow(clippy::missing_const_for_thread_local)]
     static MODELS: RefCell<HashMap<u32, SimpleMLP>> = RefCell::new(HashMap::new());
-    static NEXT_ID: RefCell<u32> = RefCell::new(1);
+    static NEXT_ID: RefCell<u32> = const { RefCell::new(1) };
 }
 
 fn next_id() -> u32 {
@@ -51,8 +56,7 @@ pub fn create_scene(room_name: &str, mep: &MEPConfig) -> u32 {
 
 #[wasm_bindgen]
 pub fn create_scene_from_json(geometry_json: &str, mep: &MEPConfig) -> u32 {
-    let dto: GeometryDTO3D = serde_json::from_str(geometry_json)
-        .expect("Invalid geometry JSON");
+    let dto: GeometryDTO3D = serde_json::from_str(geometry_json).expect("Invalid geometry JSON");
     let scene = g::build_scene(&dto, mep);
     let id = next_id();
     SCENES.with(|s| s.borrow_mut().insert(id, scene));
@@ -140,7 +144,7 @@ pub fn step_episode(scene_id: u32, state_id: u32, action: u8, mep: &MEPConfig) -
             // Update the stored state
             *state = result.state;
 
-            let obs = g::compute_obs(scene, &states[&state_id]);
+            let obs = g::compute_obs(scene, &states[&state_id], mep);
 
             let info = serde_json::json!({
                 "reward": result.reward,
@@ -177,7 +181,7 @@ pub fn get_state_position(state_id: u32) -> Vec<u32> {
 }
 
 #[wasm_bindgen]
-pub fn get_obs(scene_id: u32, state_id: u32) -> Vec<f32> {
+pub fn get_obs(scene_id: u32, state_id: u32, mep: &MEPConfig) -> Vec<f32> {
     SCENES.with(|s| {
         let scenes = s.borrow();
         let scene = scenes.get(&scene_id).expect("Invalid scene ID");
@@ -185,9 +189,16 @@ pub fn get_obs(scene_id: u32, state_id: u32) -> Vec<f32> {
         STATES.with(|st| {
             let states = st.borrow();
             let state = states.get(&state_id).expect("Invalid state ID");
-            g::compute_obs(scene, state).to_vec()
+            g::compute_obs(scene, state, mep).to_vec()
         })
     })
+}
+
+/// Observation width this build produces. Exposed so the frontend can tell a
+/// stale model from a current one before loading it.
+#[wasm_bindgen]
+pub fn obs_dim() -> usize {
+    g::OBS_DIM
 }
 
 // ── Model inference ─────────────────────────────────────────────────────────
@@ -195,6 +206,23 @@ pub fn get_obs(scene_id: u32, state_id: u32) -> Vec<f32> {
 #[wasm_bindgen]
 pub fn load_model(weights_json: &str) -> u32 {
     let weights: MLPWeights = serde_json::from_str(weights_json).expect("Invalid model JSON");
+
+    // A policy trained against a different observation layout would still run,
+    // it would just produce meaningless actions. Reject it instead.
+    let in_dim = weights
+        .layers
+        .first()
+        .and_then(|l| l.weights.first())
+        .map(|row| row.len())
+        .unwrap_or(0);
+    if in_dim != g::OBS_DIM {
+        panic!(
+            "model expects {}-dim observations but this build produces {} — retrain the agent",
+            in_dim,
+            g::OBS_DIM
+        );
+    }
+
     let mlp = SimpleMLP::from_weights(&weights);
     let id = next_id();
     MODELS.with(|m| m.borrow_mut().insert(id, mlp));

@@ -489,10 +489,12 @@ export function free_state(state_id) {
 /**
  * @param {number} scene_id
  * @param {number} state_id
+ * @param {MEPConfig} mep
  * @returns {Float32Array}
  */
-export function get_obs(scene_id, state_id) {
-    const ret = wasm.get_obs(scene_id, state_id);
+export function get_obs(scene_id, state_id, mep) {
+    _assertClass(mep, MEPConfig);
+    const ret = wasm.get_obs(scene_id, state_id, mep.__wbg_ptr);
     var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
     return v1;
@@ -556,6 +558,16 @@ export function load_model(weights_json) {
     const ptr0 = passStringToWasm0(weights_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.load_model(ptr0, len0);
+    return ret >>> 0;
+}
+
+/**
+ * Observation width this build produces. Exposed so the frontend can tell a
+ * stale model from a current one before loading it.
+ * @returns {number}
+ */
+export function obs_dim() {
+    const ret = wasm.obs_dim();
     return ret >>> 0;
 }
 

@@ -34,6 +34,10 @@ declare module "mep-routing-core" {
 
   export function list_rooms(): string[];
   export function create_scene(room_name: string, mep: MEPConfig): number;
+  export function create_scene_from_json(
+    geometry_json: string,
+    mep: MEPConfig
+  ): number;
   export function get_scene_info(scene_id: number): any;
   export function get_voxels(scene_id: number): Uint8Array;
   export function get_obstacle_positions(scene_id: number): Float32Array;
@@ -45,7 +49,14 @@ declare module "mep-routing-core" {
     mep: MEPConfig
   ): any;
   export function get_state_position(state_id: number): Uint32Array;
-  export function get_obs(scene_id: number, state_id: number): Float32Array;
+  export function get_obs(
+    scene_id: number,
+    state_id: number,
+    mep: MEPConfig
+  ): Float32Array;
+  /** Observation width this build produces. */
+  export function obs_dim(): number;
+  /** Throws if the model was trained against a different observation width. */
   export function load_model(weights_json: string): number;
   export function predict_action(
     model_id: number,

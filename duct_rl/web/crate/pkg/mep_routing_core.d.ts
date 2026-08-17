@@ -59,7 +59,7 @@ export function free_scene(scene_id: number): void;
 
 export function free_state(state_id: number): void;
 
-export function get_obs(scene_id: number, state_id: number): Float32Array;
+export function get_obs(scene_id: number, state_id: number, mep: MEPConfig): Float32Array;
 
 export function get_obstacle_positions(scene_id: number): Float32Array;
 
@@ -72,6 +72,12 @@ export function get_voxels(scene_id: number): Uint8Array;
 export function list_rooms(): any;
 
 export function load_model(weights_json: string): number;
+
+/**
+ * Observation width this build produces. Exposed so the frontend can tell a
+ * stale model from a current one before loading it.
+ */
+export function obs_dim(): number;
 
 export function predict_action(model_id: number, obs: Float32Array): number;
 
@@ -89,21 +95,6 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly create_scene: (a: number, b: number, c: number) => number;
-    readonly create_scene_from_json: (a: number, b: number, c: number) => number;
-    readonly free_model: (a: number) => void;
-    readonly free_scene: (a: number) => void;
-    readonly free_state: (a: number) => void;
-    readonly get_obs: (a: number, b: number) => [number, number];
-    readonly get_obstacle_positions: (a: number) => [number, number];
-    readonly get_scene_info: (a: number) => any;
-    readonly get_state_position: (a: number) => [number, number];
-    readonly get_voxels: (a: number) => [number, number];
-    readonly list_rooms: () => any;
-    readonly load_model: (a: number, b: number) => number;
-    readonly predict_action: (a: number, b: number, c: number) => number;
-    readonly reset_episode: (a: number) => number;
-    readonly step_episode: (a: number, b: number, c: number, d: number) => any;
     readonly __wbg_box3d_free: (a: number, b: number) => void;
     readonly __wbg_get_box3d_x_max: (a: number) => number;
     readonly __wbg_get_box3d_x_min: (a: number) => number;
@@ -160,11 +151,27 @@ export interface InitOutput {
     readonly __wbg_set_mepconfig_reward_turn_vertical: (a: number, b: number) => void;
     readonly __wbg_set_mepconfig_reward_vertical_per_voxel: (a: number, b: number) => void;
     readonly __wbg_set_mepconfig_voxel_size_m: (a: number, b: number) => void;
+    readonly create_scene: (a: number, b: number, c: number) => number;
+    readonly create_scene_from_json: (a: number, b: number, c: number) => number;
+    readonly free_model: (a: number) => void;
+    readonly free_scene: (a: number) => void;
+    readonly free_state: (a: number) => void;
+    readonly get_obs: (a: number, b: number, c: number) => [number, number];
+    readonly get_obstacle_positions: (a: number) => [number, number];
+    readonly get_scene_info: (a: number) => any;
+    readonly get_state_position: (a: number) => [number, number];
+    readonly get_voxels: (a: number) => [number, number];
+    readonly list_rooms: () => any;
+    readonly load_model: (a: number, b: number) => number;
     readonly mepconfig_name: (a: number) => [number, number];
     readonly mepconfig_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly obs_dim: () => number;
+    readonly predict_action: (a: number, b: number, c: number) => number;
     readonly preset_cable_tray: () => number;
     readonly preset_duct: () => number;
     readonly preset_pipe: () => number;
+    readonly reset_episode: (a: number) => number;
+    readonly step_episode: (a: number, b: number, c: number, d: number) => any;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

@@ -20,6 +20,9 @@ pub struct MEPConfig {
 
 #[wasm_bindgen]
 impl MEPConfig {
+    // The parameter list mirrors the struct fields one-for-one; wasm_bindgen
+    // constructors can't take a struct literal from JS.
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(constructor)]
     pub fn new(
         cross_section_mm: f64,
@@ -59,6 +62,16 @@ impl MEPConfig {
         } else {
             "duct".into()
         }
+    }
+}
+
+/// Look up a preset by the same key the Python side uses in `MEP_SYSTEMS`.
+pub fn preset_by_name(name: &str) -> Option<MEPConfig> {
+    match name {
+        "duct" => Some(preset_duct()),
+        "pipe" => Some(preset_pipe()),
+        "cable_tray" => Some(preset_cable_tray()),
+        _ => None,
     }
 }
 

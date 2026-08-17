@@ -20,10 +20,13 @@ def export_mlp_weights(model_path: str, output_path: str) -> dict:
 
     Returns dict with format:
       { "layers": [
-          { "weights": [[...]], "biases": [...] },  # 12 -> 64
+          { "weights": [[...]], "biases": [...] },  # OBS_DIM -> 64
           { "weights": [[...]], "biases": [...] },  # 64 -> 64
           { "weights": [[...]], "biases": [...] },  # 64 -> 6
       ]}
+
+    The input width is grid3d.OBS_DIM. The WASM loader checks it and rejects
+    models trained against a different observation layout.
     """
     from stable_baselines3 import PPO
 
