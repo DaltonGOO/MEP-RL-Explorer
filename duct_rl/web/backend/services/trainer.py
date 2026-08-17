@@ -10,8 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import random
+import shutil
+import tempfile
+
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
 from stable_baselines3.common.monitor import Monitor
 
 # Add the python/ directory so we can import the existing env code
@@ -29,6 +33,7 @@ class TrainJob:
     room: str
     mep_name: str
     timesteps: int
+    seed: int = 0
     status: str = "running"
     progress: float = 0.0
     current_timestep: int = 0
@@ -36,6 +41,10 @@ class TrainJob:
     model_path: str | None = None
     error: str | None = None
     cancel_flag: bool = False
+    # Best mean reward seen by the periodic evaluation, and whether the model
+    # that got saved came from there rather than the end of training.
+    best_eval_reward: float | None = None
+    used_best_checkpoint: bool = False
 
 
 class _ProgressCallback(BaseCallback):
@@ -47,6 +56,7 @@ class _ProgressCallback(BaseCallback):
         self.report_every = report_every
         self._ep_rewards: list[float] = []
         self._ep_lengths: list[int] = []
+        self._ep_successes: list[bool] = []
 
     def _on_step(self) -> bool:
         if self.job.cancel_flag:
@@ -60,6 +70,10 @@ class _ProgressCallback(BaseCallback):
             if "episode" in info:
                 self._ep_rewards.append(info["episode"]["r"])
                 self._ep_lengths.append(info["episode"]["l"])
+                # Mean reward alone hides what actually matters: whether the
+                # duct got routed. An agent that never arrives can still post
+                # a respectable reward by hugging the target.
+                self._ep_successes.append(bool(info.get("reached_target", False)))
 
         if self.num_timesteps % self.report_every == 0:
             metric: dict[str, Any] = {"timestep": self.num_timesteps}
@@ -67,11 +81,16 @@ class _ProgressCallback(BaseCallback):
                 metric["ep_rew_mean"] = sum(self._ep_rewards) / len(self._ep_rewards)
                 metric["ep_len_mean"] = sum(self._ep_lengths) / len(self._ep_lengths)
                 metric["ep_count"] = len(self._ep_rewards)
+                metric["success_rate"] = (
+                    sum(self._ep_successes) / len(self._ep_successes)
+                )
                 self._ep_rewards.clear()
                 self._ep_lengths.clear()
+                self._ep_successes.clear()
             else:
                 metric["ep_rew_mean"] = None
                 metric["ep_len_mean"] = None
+                metric["success_rate"] = None
             self.job.metrics.append(metric)
 
         return True
@@ -114,23 +133,34 @@ def start_training(
     learning_rate: float = 3e-4,
     n_steps: int = 2048,
     batch_size: int = 64,
+    seed: int | None = None,
+    eval_episodes: int = 10,
 ) -> str:
     """Launch training in a background thread. Returns job_id."""
     job_id = str(uuid.uuid4())[:8]
     mep = _mep_from_params(mep_params)
+
+    # An unrecorded seed makes a good run impossible to reproduce, so pick one
+    # when the caller doesn't and keep it on the job.
+    if seed is None:
+        seed = random.randrange(2**31 - 1)
 
     job = TrainJob(
         job_id=job_id,
         room=room or "custom",
         mep_name=mep.name,
         timesteps=timesteps,
+        seed=seed,
     )
     _jobs[job_id] = job
 
     def _train():
+        best_dir = None
         try:
             dto = _geometry_to_dto(geometry) if geometry else get_room_3d(room)
             env = Monitor(DuctRoutingEnv3D(dto, mep))
+            env.reset(seed=seed)
+
             model = PPO(
                 "MlpPolicy",
                 env,
@@ -140,18 +170,44 @@ def start_training(
                 n_epochs=10,
                 gamma=0.99,
                 ent_coef=0.01,
+                seed=seed,
                 verbose=0,
             )
-            callback = _ProgressCallback(job, report_every=500)
-            model.learn(total_timesteps=timesteps, callback=callback)
+
+            # Training reward is not monotonic here — a longer run routinely
+            # ends on a worse policy than one it passed through. Evaluate
+            # periodically and keep the best, instead of whatever the final
+            # step happens to leave behind.
+            best_dir = tempfile.mkdtemp(prefix=f"ppo3d_{job_id}_")
+            eval_env = Monitor(DuctRoutingEnv3D(dto, mep))
+            eval_env.reset(seed=seed + 1)
+            eval_cb = EvalCallback(
+                eval_env,
+                best_model_save_path=best_dir,
+                n_eval_episodes=eval_episodes,
+                eval_freq=max(n_steps, timesteps // 20),
+                deterministic=True,
+                verbose=0,
+            )
+            progress_cb = _ProgressCallback(job, report_every=500)
+            model.learn(
+                total_timesteps=timesteps,
+                callback=CallbackList([progress_cb, eval_cb]),
+            )
 
             if job.cancel_flag:
                 job.status = "cancelled"
                 return
 
+            best_path = Path(best_dir) / "best_model.zip"
+            if best_path.exists():
+                model = PPO.load(str(best_path))
+                job.used_best_checkpoint = True
+                job.best_eval_reward = float(eval_cb.best_mean_reward)
+
             # Save model
             MODELS_DIR.mkdir(parents=True, exist_ok=True)
-            model_filename = f"ppo3d_{mep.name}_{room}_{job_id}.zip"
+            model_filename = f"ppo3d_{mep.name}_{job.room}_{job_id}.zip"
             model_path = MODELS_DIR / model_filename
             model.save(str(model_path))
             job.model_path = str(model_path)
@@ -169,6 +225,9 @@ def start_training(
         except Exception as e:
             job.status = "failed"
             job.error = str(e)
+        finally:
+            if best_dir:
+                shutil.rmtree(best_dir, ignore_errors=True)
 
     thread = threading.Thread(target=_train, daemon=True)
     thread.start()

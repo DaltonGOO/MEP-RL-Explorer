@@ -44,6 +44,8 @@ class TrainRequest(BaseModel):
     learning_rate: float = 3e-4
     n_steps: int = 2048
     batch_size: int = 64
+    # Omit to have one chosen and recorded, so a good run can be repeated.
+    seed: int | None = None
 
 
 class TrainStatus(BaseModel):
